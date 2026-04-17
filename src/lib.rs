@@ -34,6 +34,33 @@ pub struct MmuConfig {
     pub arena_size: usize,
     /// What to inject on page fault
     pub fill_mode: FillMode,
+    /// Use HugePages (2MB) instead of normal pages (4KB).
+    /// Reduces TLB pressure by ~512x. Requires:
+    ///   sudo sysctl vm.nr_hugepages=N
+    /// where N >= arena_size / 2MB.
+    pub use_hugepages: bool,
+}
+
+impl MmuConfig {
+    /// Create config with normal 4KB pages.
+    pub fn normal(arena_size: usize, fill_mode: FillMode) -> Self {
+        Self { arena_size, fill_mode, use_hugepages: false }
+    }
+
+    /// Create config with 2MB HugePages (requires kernel allocation).
+    pub fn hugepages(arena_size: usize, fill_mode: FillMode) -> Self {
+        Self { arena_size, fill_mode, use_hugepages: true }
+    }
+}
+
+impl Default for MmuConfig {
+    fn default() -> Self {
+        Self {
+            arena_size: 0,
+            fill_mode: FillMode::ZeroFill,
+            use_hugepages: false,
+        }
+    }
 }
 
 /// What to inject when a page fault occurs.
@@ -133,18 +160,30 @@ impl MmuArena {
     ///
     /// Returns None if userfaultfd is not available (needs root or CAP_SYS_PTRACE).
     pub fn new(config: MmuConfig) -> Option<Self> {
-        let page_size = unsafe { sysconf(_SC_PAGESIZE) as usize };
+        let use_hugepages = config.use_hugepages;
+        let base_page_size = unsafe { sysconf(_SC_PAGESIZE) as usize };
+
+        // HugePages: 2MB alignment, normal: 4KB alignment
+        let page_size = if use_hugepages { 2 * 1024 * 1024 } else { base_page_size };
 
         // Align arena size to page boundary
         let size = (config.arena_size + page_size - 1) & !(page_size - 1);
 
-        // Step 1: Allocate virtual memory (no physical backing)
+        // Step 1: Allocate virtual memory
+        // HugePages: MAP_HUGETLB eliminates TLB thrashing for large arenas
+        // 18.5GB GGUF: 4.8M normal pages vs 9375 huge pages (512x less TLB pressure)
+        let mmap_flags = if use_hugepages {
+            MAP_PRIVATE | MAP_ANONYMOUS | libc::MAP_HUGETLB
+        } else {
+            MAP_PRIVATE | MAP_ANONYMOUS
+        };
+
         let addr = unsafe {
             mmap(
                 ptr::null_mut(),
                 size,
                 PROT_READ | PROT_WRITE,
-                MAP_PRIVATE | MAP_ANONYMOUS,
+                mmap_flags,
                 -1,
                 0,
             )

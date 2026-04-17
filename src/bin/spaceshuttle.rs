@@ -67,6 +67,7 @@ fn main() {
             claim: claim.clone(),
             clearance: ClearanceLevel::Secret,
         },
+        use_hugepages: false,
     });
 
     let arena = match arena {
@@ -126,6 +127,7 @@ fn main() {
             claim: low_claim,
             clearance: ClearanceLevel::Secret,
         },
+        use_hugepages: false,
     });
 
     if let Some(denied_arena) = arena_denied {
@@ -194,6 +196,7 @@ fn main() {
             claim: comp_claim,
             clearance: ClearanceLevel::Secret,
         },
+        use_hugepages: false,
     }).expect("Compressed arena failed");
 
     // Touch all pages — decrypt + decompress on fault
